@@ -1,0 +1,200 @@
+#!/usr/bin/perl
+#
+# Use try to connect to a http server.
+# For use with "mon".
+#
+# Special version to measure and log http file transfer speed
+#
+# Use: "-p port -l log_file -T alarm_seconds -t timeout_seconds host [host:/path_to_doc ...]"
+
+# Configuration file example:
+
+#hostgroup internet_web www.ama-assn.org www.gartner.com test.ahp.com:/~meekj/ca_zip.txt
+
+#watch internet_web
+#        service internet_web
+#        interval 1h
+#        monitor http_t.monitor -l /usr/local/mon/logs/internet_web -T 15.0 -t 100
+#        period wd {Sun-Sat}
+#            alert mail.alert firewall_admin
+#            alertevery 1h
+
+#TODO: Allow port number to be specified in URL
+
+#
+# Jon Meek
+# American Cyanamid Company
+# Princeton, NJ
+# meekj@pt.cyanamid.com
+#
+# $Id: http_t.monitor 1.3 Sat, 30 Jun 2001 14:44:29 -0400 trockij $
+#
+#    Copyright (C) 1998, Jon Meek
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+use Getopt::Std;
+use English;
+use Time::HiRes qw( gettimeofday tv_interval );
+
+getopts ("p:t:T:l:");
+$PORT = $opt_p || 80;
+$TIMEOUT = $opt_t || 30;
+
+@failures = ();
+
+$TimeOfDay = time;
+
+foreach $host_path (@ARGV) { # Build host and path lists
+
+    ($host, $path) = split(/:/, $host_path, 2);
+    push(@Hosts, $host);
+    if (length($path) < 1) {
+	$Path{$host} = '/';
+    } else {
+	$Path{$host} = $path;
+    }
+
+}
+
+# Open logfile, if -l
+
+if ($opt_l) {
+    open(LOG, ">>$opt_l") || warn "$0 Can't open logfile: $opt_l\n";
+}
+
+foreach $host (@Hosts) {
+
+    ($OK, $ByteCount, $GetTime) = &httpGET($host, $PORT, $Path{$host});
+
+    if (!defined (OK) || $OK == 0) {
+	push (@failures, $host);
+    }
+
+    $ResultString{$host} = sprintf "%d %s %s %d %8.3f",
+    $TimeOfDay, $host, $Path{$host}, $ByteCount, $GetTime;
+
+    if ($opt_l) {
+	print LOG "$ResultString{$host}\n";
+    }
+
+}
+
+close LOG;
+
+if (@failures == 0) {
+    exit 0;
+}
+
+print joint (" ", sort @failures), "\n";
+
+foreach $host (sort keys %ResultString) {
+    print "$ResultString{$host}\n";
+}
+
+exit 1;
+
+
+sub httpGET {
+    use Socket;
+    use Sys::Hostname;
+
+    my($Server, $Port, $Path) = @_;
+    my($ServerOK, $TheContent, $ByteCount, $dt);
+
+    $TheContent = '';
+
+    $dt = 0;
+    $t0 = [gettimeofday];
+
+###############################################################
+    eval {
+
+	local $SIG{ALRM} = sub { die "Timeout Alarm" };
+	alarm $TIMEOUT;
+	$result = &OpenSocket($Server, $Port); # Open a connection to the server
+	if ($result == 0) { # Failure to open the socket
+	    return '', 0, 0;
+	}
+
+	print S "GET $Path HTTP/1.0\r\n";
+	print S "Host: $Server\r\n";
+	print S "User-Agent: mon.d/http.monitor\r\n\r\n";
+
+	while ($in = <S>) {
+	    $ByteCount += length($in);
+	    $TheContent .= $in;  # Store data for later processing
+	}
+
+	alarm 0; # Cancel the alarm
+
+#       HTTP/1.1 200 OK
+
+	if ($TheContent =~ /^HTTP\/([\d\.]+)\s+(200|302)\b/) {
+	    $ServerOK = 1;
+	} else {
+	    $ServerOK = 0;
+	}
+	close(S);
+
+    };
+
+    if ($ServerOK) { # Success, otherwise set time to -1 to indicate time-out
+	$t1 = [gettimeofday];
+	$dt = tv_interval($t0, $t1);
+    } else {
+	$dt = -1;
+    }
+
+    if (($opt_T) && ($dt >= 0)) { # Check time limit for alarm
+	if ($dt > $opt_T) {
+	    $ServerOK = 0;
+	} else {
+	    $ServerOK = 1;
+	}
+    }
+
+    if ($EVAL_ERROR and ($EVAL_ERROR =~ /^Timeout Alarm/)) {
+	print "**** Time Out\n";
+	return 0;
+    }
+    return $ServerOK, $ByteCount, $dt;
+
+}
+
+sub OpenSocket {
+#
+# Make a Berkeley socket connection between this program and a TCP port
+#  on another (or this) host. Port can be a number or a named service
+#
+    local($OtherHostname, $Port) = @_;
+    local($OurHostname, $sockaddr, $name, $aliases, $proto, $type, $len,
+	  $ThisAddr, $that);
+    $OurHostname = &hostname;
+
+    ($name, $aliases, $proto) = getprotobyname('tcp');
+    ($name, $aliases, $Port) = getservbyname($Port, 'tcp') unless $Port =~ /^\d+$/;
+    ($name, $aliases, $type, $len, $ThisAddr) = gethostbyname($OurHostname);
+    ($name, $aliases, $type, $len, $OtherHostAddr) = gethostbyname($OtherHostname);
+
+    my $that = sockaddr_in ($Port, $OtherHostAddr);
+
+    $result = socket(S, &PF_INET, &SOCK_STREAM, $proto) || return undef;
+
+    $result = connect(S, $that) || return undef;
+
+    select(S); $| = 1; select(STDOUT);      # set S to be un-buffered
+    return 1;                               # success
+}

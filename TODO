@@ -1,0 +1,64 @@
+$Id: TODO 1.7 Mon, 13 Aug 2001 07:02:17 -0400 trockij $
+
+-add short "trap howto" and "radius howto" posts to the mon
+ list in the doc/ directory.
+
+-make traps authenticate via the same scheme used to obscure
+ the password in RADIUS packets
+
+-have an absolute "alertevery" which squelches alerts
+ regardless of whether or not the service goes down/up/down.
+    
+-descriptions defined in mon.cf should be 'quoted'
+
+-document command section, trap section, snmp trap section in authfile
+
+-there should be only one routine which handles dealing with failures
+ and successes (including calling alerts), probably the routine which tests
+ $? in proc_cleanup.
+
+-output to client should be buffered and incorporated into the I/O loop.
+ There is the danger that a sock_write to a client will block the server.
+
+-finish muxpect
+
+-make "chainable" alerts
+
+-make alerts nonblocking, and handle them in a similar fashion to
+ monitors. i.e., serialize per-service (or per-period) alerts.
+
+-document "clear" client command
+
+-Separate the decision-making code about sending alerts into a
+ separate routine, and make do_alert do nothing but deliver the
+ actual alert.
+
+-Document trap authentication.
+
+-Document traps.
+
+-fix client opstatus parsing by converting clients to use Mon::Client
+
+-Make monitors parallelize their tasks, similar to fping.monitor. This
+ is an important scalability problem.
+
+-make changes to tkined so that it can query a mon server and
+ update the graphical map accordingly.
+
+-re-vamp the host disabling. 1) store them in a table with a timeout
+ on each so that they can automatically re-enable themselves so
+ people don't forget to re-enable them manually. 2) don't do
+ the disabling by "commenting" them out of the host groups.
+ We still want them to be tested for failure, but just disable
+ alerts that have to do with the disabled hosts.
+ When a host is commented out, accept a "reason" field that
+ is later accessible so that you can tell why someone disabled
+ the host.
+
+-allow checking a service at a particular time of day, maybe using
+ inPeriod.
+
+-maybe make a command that will disable an alert for a certain amount
+ of time (maybe implement this as an at(1) job??)
+
+-make it possible to disable just one of multiple alarms in a service

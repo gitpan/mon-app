@@ -1,0 +1,193 @@
+#!/usr/bin/perl
+#
+# Use SNMP to get free disk space from a Network Appliance
+# exits with value of 1 if free space on any host drops below
+# the supplied parameter, or exits with the value of 2 if
+# there is a "soft" error (SNMP library error, or could not get a
+# response from the server).
+#
+# This requires the UCD SNMP library and G.S. Marzot's Perl SNMP
+# module.
+#
+# Originally by Jim Trocki.  Modified by Theo Van Dinter
+# (tvd@colltech.com, felicity@kluge.net) to add verbose error output,
+# more error checking, etc.  Can be used in conjunction with
+# snapdelete.alert to auto-remove snapshots if needed.
+#
+# $Id: netappfree.monitor 1.3 Fri, 03 Aug 2001 15:58:04 -0400 trockij $
+#
+#    Copyright (C) 1998, Jim Trocki
+#    Copyright (C) 1999-2001, Theo Van Dinter
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+use SNMP;
+use Getopt::Long;
+
+sub list;
+sub readcf;
+sub toKB;
+
+$ENV{"MIBS"} = 'RFC1213-MIB:NETWORK-APPLIANCE-MIB';
+
+GetOptions (\%opt, "community=s", "timeout=i", "retries=i", "config=s", "list");
+
+die "no host arguments\n" if (@ARGV == 0);
+
+$RET = 0;
+@ERRS = ();
+%HOSTS = ();
+
+$COMM = $opt{"community"} || "public";
+$TIMEOUT = $opt{"timeout"} * 1000 * 1000 || 2000000;
+$RETRIES = $opt{"retries"} || 5;
+$CONFIG = $opt{"config"} || (-d "/etc/mon" ? "/etc/mon" : "/usr/lib/mon/etc")
+	. "/netappfree.cf";
+
+list (@ARGV) if ($opt{"list"});
+
+($dfIndex, $dfFileSys, $dfKBytesTotal, $dfKBytesAvail) = (0..3);
+
+readcf ($CONFIG) || die "could not read config: $!\n";
+
+foreach $host (@ARGV) {
+    next if (!defined $FREE{$host});
+
+    if (!defined($s = new SNMP::Session (DestHost => $host,
+    		Timeout => $TIMEOUT, Community => $COMM,
+		Retries => $RETRIES))) {
+	$RET = ($RET == 1) ? 1 : 2;
+	$HOSTS{$host} ++;
+	push (@ERRS, "could not create session to $host: " . $SNMP::Session::ErrorStr);
+	next;
+    }
+
+    $v = new SNMP::VarList (
+    	['dfIndex'],
+    	['dfFileSys'],
+    	['dfKBytesTotal'],
+    	['dfKBytesAvail'],
+    );
+
+    if ( $v->[$dfIndex]->tag !~ /^df/ ) {
+    	push(@ERRS,"OIDs not mapping correctly!  Check that NetApp MIB is available!");
+	$RET = 1;
+	last;
+    }
+
+    while (defined $s->getnext($v)) {
+
+	last if ($v->[$dfIndex]->tag !~ /dfIndex/);
+
+	if ($v->[$dfKBytesAvail]->val < $FREE{$host}{$v->[$dfFileSys]->val}) {
+	    $HOSTS{$host} ++;
+	    push (@ERRS, sprintf ("%1.1fGB free on %s:%s",
+	    	$v->[$dfKBytesAvail]->val / 1024 / 1024,
+		$host, $v->[$dfFileSys]->val));
+	    $RET = 1;
+	}
+    }
+
+    if ($s->{ErrorNum}) {
+	$HOSTS{$host} ++;
+	push (@ERRS, "could not get dfIndex for $host: " . $s->{ErrorStr});
+	$RET = ($RET == 1) ? 1 : 2;
+    }
+}
+
+
+if ($RET) {
+    print join(" ", sort keys %HOSTS), "\n\n", join("\n", @ERRS), "\n";
+}
+
+exit $RET;
+
+
+#
+# read configuration file
+#
+sub readcf {
+    my ($f) = @_;
+    my ($l, $host, $filesys, $free);
+
+    open (CF, $f) || return undef;
+    while (<CF>) {
+    	next if (/^\s*#/ || /^\s*$/);
+	chomp;
+	($host, $filesys, $free) = split;
+	if (!defined ($FREE{$host}{$filesys} = toKB ($free))) {
+	    die "error free specification, config $f, line $.\n";
+	}
+    }
+    close (CF);
+}
+
+
+sub toKB {
+    my ($free) = @_;
+    my ($n, $u);
+
+    if ($free =~ /^(\d+\.\d+)(kb|mb|gb)$/i) {
+        ($n, $u) = ($1, "\L$2");
+    } elsif ($free =~ /^(\d+)(kb|mb|gb)$/i) {
+        ($n, $u) = ($1, "\L$2");
+    } else {
+    	return undef;
+    }
+
+    return (int ($n * 1024)) if ($u eq "mb");
+    return (int ($n * 1024 * 1024)) if ($u eq "gb");
+    int ($n);
+}
+
+sub list {
+    my (@hosts) = @_;
+
+    foreach $host (@hosts) {
+	if (!defined($s = new SNMP::Session (DestHost => $host,
+		    Timeout => $TIMEOUT,
+		    Community => $COMM,
+		    Retries => $RETRIES))) {
+	    print STDERR "could not create session to $host: " . $SNMP::Session::ErrorStr, "\n";
+	    next;
+	}
+
+	$ver = $s->get(['sysDescr', 0]);
+	$ver =~ s/^netapp.*release\s*([^:]+):.*$/$1/i;
+
+	$v = new SNMP::VarList (
+	    ['dfIndex'],
+	    ['dfFileSys'],
+	    ['dfKBytesTotal'],
+	    ['dfKBytesAvail'],
+	);
+
+	while (defined $s->getnext($v)) {
+	    last if ($v->[$dfIndex]->tag !~ /dfIndex/);
+	    write;
+	}
+    }
+    exit 0;
+}
+
+format STDOUT_TOP =
+filer            ONTAP       filesystem               KB total     KB avail
+---------------------------------------------------------------------------
+.
+
+format STDOUT =
+@<<<<<<<<<<<<<<  @<<<<<<<<<< @<<<<<<<<<<<<<<<      @>>>>>>>>>>  @>>>>>>>>>>
+$host, $ver, $v->[1]->[2], $v->[2]->[2], $v->[3]->[2]
+.

@@ -1,0 +1,174 @@
+$Id: INSTALL 1.3 Wed, 01 Aug 2001 23:37:02 -0400 trockij $
+
+INSTALLATION
+------------
+
+Several parts:
+
+    1. mon, the server
+
+    2. Mon::Client, the Perl library used by some clients.
+
+    3. C programs in mon.d
+
+
+REQUIREMENTS
+------------
+
+The "mon" daemon uses Perl 5.n, where n >= 005_01. Older versions of
+Perl had problems with Sys::Syslog under Linux, and had dated versions of
+Text::ParseWords.  Mon also requires that *.ph be created from the system
+header files. Normally this is done manually during Perl installation
+by these means:
+
+	cd /usr/include
+	h2ph *.h sys/*.h
+
+However, if you're running Linux you may need to run
+
+	cd /usr/include
+	h2ph *.h sys/*.h asm/*.h
+
+If you try to run mon and Perl complains with the "did you run h2ph?"
+message, then chances are this step wasn't done.
+
+You'll need the following modules for the server to function, all of
+which are available from your nearest CPAN archive, or the place
+where you got mon:
+
+    -Time::Period
+    -Time::HiRes
+    -Convert::BER
+    -Mon::*
+
+All of the monitor and alert scripts that are packaged with mon are
+actually *optional*. However, this is what you'll need for each special
+monitor:
+
+    freespace.monitor
+	The disk space monitor requires the "Filesys::DiskSpace" Perl
+	module from CPAN.
+
+    fping.monitor
+	Requires the "fping" code, probably available from the same
+	place that you got this package.
+
+    telnet.monitor
+    	This requires the Net::Telnet Perl module, available from
+	CPAN.
+
+    reboot.monitor
+    asyncreboot.monitor
+    netappfree.monitor
+    process.monitor
+    hpnp.monitor
+	All use the UCD SNMP 3.6.3, along with G.S. Marzot's
+	Perl module.
+
+    ldap.monitor
+	requires the Net::LDAPapi Perl module, available from CPAN.
+
+    dialin.monitor
+	requires the Perl Expect module, available from CPAN.
+
+    dns.monitor
+	requires the Net::DNS Perl module.
+
+    msql-mysql.monitor
+	requires the MSQL/MySQL DBD module and DBI front-end.
+
+There are a good number of useful monitors included which are not listed
+above, so please take the time to read doc/README.monitors to get the
+details.
+
+
+1. INSTALLING THE PERL CLIENT MODULE
+------------------------------------
+
+As of 0.38.8, the Perl client module is distributed as a separate
+package. It is named "Mon-*.tar.gz". As of 1-Aug-2001, the most
+recent distribution is Mon-0.99.1.tar.gz. Refer to that for
+installation instructions. This module is available in both CPAN
+(http://www.perl.com/CPAN/) and on kernel.org mirrors in the
+/pub/software/admin/mon directory.
+
+
+2. MON SERVER INSTALLATION
+--------------------------
+
+-Read the man page for "mon" and "moncmd" in the doc/ directory to get
+ an overview about the directories involved, i.e. the configuration,
+ alert, monitors, state, and run directories.
+
+ cd doc
+ nroff -man mon.1 | more
+
+-read the "READMEs" in the doc/ directory for some useful
+ insight on system configuration.
+
+-Be sure you have the required Perl modules, which are listed in this
+ file.
+
+-Make your own mon.cf file, using the suppled "example.cf" (located
+ in the etc/ directory) as a template, or the m4-based "example.m4":
+
+ cp etc/example.cf mon.cf
+ 
+or
+
+ cp etc/example.m4 mon.m4
+
+-Edit the "auth.cf" file. This file controls which users can perform
+ what command. The default is pretty restrictive (read-only), but that's
+ only for safety. Currently, "moncmd", "monshow", and "mon.cgi" are the
+ only clients which are able to authenticate themselves to the server;
+ the 2-way pager interface does not yet perform authentication. However,
+ these programs work fine in read-only mode.
+
+
+-Add the following lines to /etc/services:
+
+mon             2583/tcp                        # MON
+mon             2583/udp                        # MON traps
+
+-You may want to make a DNS CNAME entry called "monhost" for your
+ host that will run "mon". You can then set the environment variable
+ MONHOST to be this host. "moncmd" uses this variable.
+
+-The Perl scripts look for perl in /usr/bin. You might want to change
+ this. I'd advise keeping a locally-installed copy of Perl if you're
+ going to monitor network resources and you expect this stuff to work
+ when some component of the network is down.
+
+-Test it by starting "mon" from the distribution directory. Use these
+ arguments if you chose the non-m4 config:
+
+    ./mon -f -c mon.cf -b `pwd`
+
+and these arguments for the m4-based config:
+
+    ./mon -f -M -c mon.m4 -b `pwd`
+
+To see if it's running on your machine:
+
+    ./clients/moncmd -s localhost list pids
+
+If you get some output, then things are probably OK. Check the
+syslog for further diagnostics.
+
+Mon doesn't really need to be installed in any special location.  Just
+keep it on the local disk of the machine which will be running the server.
+
+
+3. COMPILING THE C CODE (optional)
+----------------------------------
+
+-cd mon.d
+ (edit Makefile)
+ make
+ make install
+ cd ..
+
+ to build the RPC monitor and the dialin.monitor wrapper.  Keep in mind
+ that if this may fail for some reason (it works under Linux, Solaris,
+ and AIX), it is not required for the operation of mon itself.

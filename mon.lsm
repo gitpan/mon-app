@@ -1,0 +1,25 @@
+Begin3
+Title:		mon
+Version:	0.38.16
+Entered-date:	Sun Feb  6 16:44:57 PST 2000
+Description:	An extensible service monitoring daemon which can be
+		used to monitor network or non-network resources.
+		Written in Perl 5, this code should be able to run
+		out-of-the-box on many platforms. It supports a flexible
+		configuration file, and can send out email, alphanumeric
+		pages, or any other type of alert when it detects the
+		failure of a service. The server can react to traps, in
+		addition to poll services for success or failure. Service
+		monitors that come with the distribution can test for
+		ping, telnet, ftp, smtp, http, nntp, pop3, imap, disk
+		space, and SNMP queries.
+Keywords:	network monitoring SNMP daemon service monitoring alert management
+Author: 	Jim Trocki, Transmeta Corporation, trockij@transmeta.com (Jim Trocki)
+Maintained-by:	trockij@transmeta.com (Jim Trocki)
+Primary-site:	ftp.kernel.org /pub/software/admin/mon
+		123k mon-0.38.16.tar.gz
+Alternate-site: prep.to /pub/mon/mon-0.38.16.tar.gz
+		123k mon-0.38.16.tar.gz
+Platforms:	Linux, Solaris, other platforms should work.
+Copying-policy:	GPL
+End

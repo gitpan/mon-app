@@ -1,0 +1,274 @@
+#!/usr/bin/perl
+
+# Yet another smtp monitor using IO::Socket with timing and logging
+
+#
+# $Id: smtp3.monitor 1.1 Fri, 27 Jul 2001 11:39:59 -0400 trockij $
+#
+#    Copyright (C) 2001, Jon Meek, meekj@ieee.org
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+
+=head1 NAME
+
+B<smtp3.monitor> - smtp monitor for mon with timing and logging
+
+=head1 DESCRIPTION
+
+A SMTP monitor using IO::Socket with connection response timing and
+optional logging. This test is simple, as soon as the greeting banner
+is received from the SMTP server the monitor client closes the session
+with a QUIT command.
+
+=head1 SYNOPSIS
+
+B<smtp3.monitor> -l log_file_YYYYMM.log -t timeout_seconds -T alarm_time host host1 host2 ...
+
+=head1 OPTIONS
+
+=over 5
+
+=item B<-d> Debug/Test
+
+=item B<-t timeout> Connect timeout in seconds
+
+=item B<-T alarm_timeout> Alarm if connect is successful but took
+longer than alarm_timeout seconds
+
+=item B<-l log_file_template> /path/to/logs/smtp_YYYYMM.log
+Current year & month are substituted for YYYYMM, that is the only
+possible template at this time.
+
+=back
+
+=head1 MON CONFIGURATION EXAMPLE
+
+ hostgroup smtp mail1.mymails.org mail2.mymails.org
+                mail3.mymails.org
+
+ watch smtp
+        service smtp_check
+        interval 5m
+        monitor smtp3.monitor -t 70 -T 30 -l /n/na1/logs/wan/smtp_YYYYMM.log 
+        period wd {Sun-Sat}
+                alert mail.alert meekj@mymails.org
+                alertevery 1h summary
+
+
+=head1 LOG FILE FORMAT
+
+A normal log entry has the format:
+
+ measurement_time  smtp_host_name  connect_time
+
+A failed connection log entry contains:
+
+ measurement_time  smtp_host_name connect_time  smtp_code_and_greeting (or connect_error)
+
+Where:
+
+F<measurement_time> - Is the time of the connection attempt in seconds since 1970
+
+F<smtp_host_name> - Is the name of the smtp server that was tested
+
+F<connect_time> - Is the time from the connect request until the SMTP
+greeting appeared in seconds with 100 microsecond resolution
+
+F<smtp_code_and_banner> - Should have the SMTP response code integer
+followed by the greeting banner
+
+F<connect_error> - If present may indicate "Connect failed" meaning
+that the connect attempt failed immediately, possibly due to a DNS
+lookup error or because the server is not running any service on port
+25. The field may also be "Connect timeout" indicating that the
+connect failed after the set timeout period.
+
+=head1 BUGS
+
+A SMTP temporary failure code should cause the monitor to retry the connection.
+
+This initial release has seen less than one day of testing.
+
+=head1 REQUIRED PERL MODULES
+
+ IO::Socket
+ Time::HiRes
+
+If you do not have Time::HiRes you can choose to comment out the lines
+that refer to F<gettimeofday> and F<tv_interval> but several features will be lost.
+
+=head1 AUTHOR
+
+Jon Meek, meekj@ieee.org
+
+=cut
+
+use Getopt::Std;
+use IO::Socket;
+use Time::HiRes qw( gettimeofday tv_interval );
+
+$RCSid = q{$Id: smtp3.monitor 1.1 Fri, 27 Jul 2001 11:39:59 -0400 trockij $};
+
+getopts ("ds:t:T:l:"); # s not used yet, may be optional smtp command
+
+$TimeOut = $opt_t || 30; # Default timeout in seconds
+$dt = 0; # Initialize connect time variable
+
+@Failures = ();
+
+$TimeOfDay = time;
+print "TimeOfDay: $TimeOfDay\n" if $opt_d;
+
+foreach $host (@ARGV) {	# Check each host
+  
+  print "Check: $host\n" if $opt_d;
+  push(@HostNames, $host);
+  $TestTime{$host} = time;
+#
+# Use eval/alarm to handle timeout
+#
+  eval {
+    local $SIG{ALRM} = sub { die "timeout\n" }; # Alarm handler
+    
+    alarm($TimeOut);      # Do a SIG_ALRM in $TimeOut seconds
+    $t1 = [gettimeofday]; # Start connection timer, then connect
+    $sock = IO::Socket::INET->new(PeerAddr => $host,
+				  PeerPort => 'smtp(25)',
+				  Proto    => 'tcp');
+
+    if (defined $sock) {    # Connection succeded
+
+      $in = <$sock>;        # Get banner
+      $t2 = [gettimeofday]; # Stop clock
+      chomp $in;            # Clean up banner EOL
+      $ResponseBanner{$host} = $in;
+      print "banner: $in\n" if $opt_d;
+#     print $sock "NOOP\r\n";        # may want to add optional command later
+      print $sock "QUIT\r\n";        # Shutdown connection
+      close $sock;
+      $dt = tv_interval ($t1, $t2);  # Compute connection time
+      if ($in !~ /^220\s+/) {        # Consider "220 Service ready" to be only valid
+	push(@Failures, $host);      # Note failure
+	$FailureDetail{$host} = $in; # Save failure banner
+      }
+      $ConnectTime{$host} = sprintf("%0.4f", $dt); # Format to 100us resolution
+      if ($opt_T) { # Check for slow response
+	if ($dt > $opt_T) {
+	  push(@Failures, $host);    # Call it a failure
+	  $FailureDetail{$host} = "Slow Connect";
+	}
+      }
+
+    } else {                         # Connection failed
+
+      print "Connect to $host failed\n" if $opt_d;
+      push(@Failures, $host);        # Save failed host
+      $FailureDetail{$host} = "Connect failed";
+      $ConnectTime{$host} = -1;
+    }
+  };
+  alarm(0);              # Stop alarm countdown
+  if ($@ =~ /timeout/) { # Detect timeout failures
+    push(@Failures, $host);
+    $FailureDetail{$host} = "Connect timeout";
+    $ConnectTime{$host} = -1;
+  }
+
+}
+
+if ($opt_d) {
+  foreach $host (sort @HostNames) {
+    print "$TestTime{$host} $host $ConnectTime{$host} $ResponseBanner{$host}\n";
+  }
+}
+
+# Write results to logfile, if -l
+
+if ($opt_l) {
+  # Determine logfile name, usually based on year/month
+  $LogFile = $opt_l;
+  ($sec,$min,$hour,$mday,$Month,$Year,$wday,$yday,$isdst) =
+    localtime($TimeOfDay);
+  $Month++;
+  $Year += 1900;
+  $YYYYMM = sprintf('%04d%02d', $Year, $Month);
+  $LogFile =~ s/YYYYMM/$YYYYMM/; # Fill in current year and month
+  
+  open(LOG, ">>$LogFile") || warn "$0 Can't open logfile: $LogFile\n";
+  foreach $host (sort @HostNames) {
+    print LOG "$TestTime{$host} $host $ConnectTime{$host} $FailureDetail{$host}\n";
+  }
+  close LOG;
+}
+
+if (@Failures == 0) { # Indicate "all OK" to mon
+  exit 0;
+}
+
+#
+# Otherwise we have one or more failures
+#
+@SortedFailures = sort @Failures;
+
+print "@SortedFailures\n";
+
+foreach $host (@SortedFailures) {
+    print "$host $ConnectTime{$host} $FailureDetail{$host}\n";
+}
+print "\n";
+
+exit 1; # Indicate failure to mon
+
+
+__END__
+  
+SMTP Reply Codes From RFC-821 - may use in the future
+
+  211 System status, or system help reply
+  214 Help message
+      [Information on how to use the receiver or the meaning of a
+       particular non-standard command; this reply is useful only
+       to the human user]
+  220 <domain> Service ready
+  221 <domain> Service closing transmission channel
+  250 Requested mail action okay, completed
+  251 User not local; will forward to <forward-path>
+   
+  354 Start mail input; end with <CRLF>.<CRLF>
+   
+  421 <domain> Service not available,
+      closing transmission channel
+      [This may be a reply to any command if the service knows it
+       must shut down]
+  450 Requested mail action not taken: mailbox unavailable
+      [E.g., mailbox busy]
+  451 Requested action aborted: local error in processing
+  452 Requested action not taken: insufficient system storage
+   
+  500 Syntax error, command unrecognized
+      [This may include errors such as command line too long]
+  501 Syntax error in parameters or arguments
+  502 Command not implemented
+  503 Bad sequence of commands
+  504 Command parameter not implemented
+  550 Requested action not taken: mailbox unavailable
+      [E.g., mailbox not found, no access]
+  551 User not local; please try <forward-path>
+  552 Requested mail action aborted: exceeded storage allocation
+  553 Requested action not taken: mailbox name not allowed
+      [E.g., mailbox syntax incorrect]
+  554 Transaction failed
+

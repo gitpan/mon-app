@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# an example of calling moncmd in batch mode
+#
+# $Id: batch-example 1.1 Sat, 26 Aug 2000 15:22:34 -0400 trockij $
+#
+trap "stty echo && echo && exit" 2
+
+echo -n "Password: "
+stty -echo
+read p
+echo
+stty echo
+
+cat <<EOF | moncmd -a
+USER=monuser
+PASS=$p
+list failures
+enable host xyz
+EOF

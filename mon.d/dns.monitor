@@ -1,0 +1,206 @@
+#!/usr/bin/perl
+#
+# Copyright (C) 1998 David Eckelkamp
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+# $Id: dns.monitor 1.2 Sun, 24 Jun 2001 21:54:19 -0400 trockij $
+#
+=head1 NAME
+
+dns.monitor - Monitor DNS servers for the "mon" system
+
+=head1 SYNOPSIS
+
+B<dns.monitor> I<-zone zone [-zone zone ...]> I<-master master> I<server [server ...]>
+
+=head1 DESCRIPTION
+
+B<dns_verify> will make several DNS queries to verify that a server is
+providing the correct information for a zone. The I<zone> argument is the
+zone to check. There can be multiple I<zone> arguments. The I<master>
+argument is the master server for the I<zone>.  It will be queried for the
+base information.  Then each I<server> will be queried to verify that it
+has the correct answers.  It is assumed that each I<server> is supposed to
+be authoritative for the I<zone>.
+
+=head1 AUTHOR
+
+The script was written by David Eckelkamp <davide@tradewave.com>
+
+=cut
+    
+#use strict;
+use Getopt::Long;
+use English;
+use File::Basename;
+use Net::DNS::Resolver;
+use Net::DNS::Packet;
+use Net::DNS::RR;
+
+my($Program) = basename($0);
+my(@Zones)   = ();
+my($Master)  = undef;
+my(%OptVars) = ("master" => \$Master,
+		"zone" => \@Zones);
+
+if (!GetOptions(\%OptVars, "master=s", "zone=s@")) {
+    print STDERR "Problems with Options, sorry\n";
+    exit 1;
+}
+if ( $#ARGV < 0 ) {
+    print STDERR "$Program: at least one server must be specified\n";
+    exit 1;
+}
+if (!defined($Master)) {
+    print STDERR "$Program: The zone master server must be specified\n";
+    exit 2;
+}
+if ( !defined(@Zones) ) {
+    print STDERR "$Program: At least one zone must be specified\n";
+    exit 2;
+}
+
+my($err_cnt) = 0;
+my($bad_servers, $reason, @FailedZones, @FailedServers, @Reasons);
+my($zone, $line, $i);
+
+foreach $zone (@Zones) {
+    ($bad_servers, $reason) = dns_verify($zone, $Master, @ARGV);
+    if (defined($bad_servers)) {
+	$err_cnt++;
+	push(@FailedZones, $zone);
+	push(@FailedServers, $bad_servers);
+	push(@Reasons, $reason);
+    }
+}
+
+@FailedServers=split(' ',join(" ",@FailedServers));
+my (@UniqFailedServers, %saw);
+@saw{@FailedServers} = ();
+@UniqFailedServers = keys %saw;
+
+if ($err_cnt > 0) {
+    print join(" ", @UniqFailedServers); 
+    print "\n";
+
+    # Now print the detail lines
+    for ($i=0; $i<=$#FailedZones; $i++) {
+	print "Zone '$FailedZones[$i]': failed servers: $FailedServers[$i]\n";
+	print "Diagnostics:\n";
+	foreach $line (split("\n", $Reasons[$i])) {
+	    print "     $line\n";
+	}
+	print "\n";
+    }
+}
+
+exit $err_cnt;
+
+# dns_verity($zone, $master, $server, ...)
+
+# This subroutine takes 3 or more arguments. The first argument is the name of
+# the DNS zone/domain to check.  The second argument is the name of the DNS
+# server you consider to be the master of the given zone. The subroutine
+# will make a DNS query to the the master to get the SOA for the zone and
+# extract the serial number.  The third and rest of the arguments are taken as
+# names of slave DNS servers.  Each server will be queried for the SOA of the
+# given zone and the serial number will be checked against that found in the
+# SOA record on the master server. 
+
+# The return value is a 2 element list. The first element is a space delimited
+# string containing the names of the slave servers that did not match the
+# master zone.  The second element is a string containing the diagnostic
+# output that should explain the problem encountered.
+
+sub dns_verify {
+    # First verify that we have enough arguments.
+    my($Zone, $Master, @Servers) = @_;
+    my($result) = undef;
+    my(@failed, $res, $soa_req, $Serial, $error_cnt, $server);
+
+    # Query the $Master for the SOA of $Zone and get the serial number.
+    $res = new Net::DNS::Resolver;
+    $res->defnames(0);		# don't append default zone
+    $res->recurse(0);		# no recursion
+    $res->retry(2);		# 2 retries before failure
+    $res->nameservers($Master);
+    $soa_req = $res->query($Zone, "SOA");
+    if (!defined($soa_req) || ($soa_req->header->ancount <= 0)) {
+	return($Master,
+	       sprintf("SOA query for $Zone from $Master failed %s\n",
+		       $res->errorstring));
+    }
+    unless ($soa_req->header->aa) {
+	return($Master, 
+	       sprintf("$Master is not authoritative for $Zone\n"));
+    }
+    unless ($soa_req->header->ancount == 1) {
+	return($Master,
+	       sprintf("Too many answers for SOA query to %s for %s\n",
+		       $Master, 
+		       $Zone));
+    }
+    unless (($soa_req->answer)[0]->type eq "SOA") {
+	return($Master,
+	       printf("Query for SOA for %s from %s failed: " .
+		      "return type = %s\n",
+		      $Zone,
+		      $Master, 
+		      ($soa_req->answer)[0]->type));
+    }
+    $Serial = ($soa_req->answer)[0]->serial;
+
+    # Now, foreach server given on the command line, get the serial number from
+    # the SOA and compare it to the master.
+    $error_cnt = 0;
+    foreach $server (@Servers) {
+	$res = new Net::DNS::Resolver;
+	$res->defnames(0);		# don't append default zone
+	$res->recurse(0);		# no recursion
+	$res->retry(2);		# 2 retries before failure
+	$res->nameservers($server);
+	$soa_req = $res->query($Zone, "SOA");
+	if (!defined($soa_req) || ($soa_req->header->ancount <= 0)) {
+	    $error_cnt++;
+	    push(@failed, $server);
+	    $result .= sprintf("SOA query for $Zone from $server failed %s\n",
+			       $res->errorstring);
+	    next;
+	}
+	unless($soa_req->header->aa && $soa_req->header->ancount == 1 &&
+	       ($soa_req->answer)[0]->type eq "SOA" &&
+	       ($soa_req->answer)[0]->serial == $Serial) {
+	    $error_cnt++;
+	    push(@failed, $server);
+	    $result = sprintf("Query to $server about $Zone failed\n" . 
+			       "Authoritative = %s\n" . 
+			       "Answer count = %d\n" . 
+			       "Answer Type = %s\n" .
+			       "Serial number = %s, should have been %s\n" ,
+			       $soa_req->header->aa ? "yes" : "no",
+			       $soa_req->header->ancount,
+			       ($soa_req->answer)[0]->type,
+			       ($soa_req->answer)[0]->serial, 
+			       $Serial);
+	    next;
+	}
+    }
+    if ($error_cnt == 0) {
+	return(undef, undef);
+    } else {
+	return("@failed", $result);
+    }
+}

@@ -1,0 +1,19 @@
+#
+# commands to allow through the pager interface
+#
+# $Id: allow 1.1 Sat, 26 Aug 2000 15:22:34 -0400 trockij $
+#
+
+# enable
+eh
+es
+ew
+
+# disable
+dh
+ds
+dw
+
+# list
+lf
+ld

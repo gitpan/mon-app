@@ -1,0 +1,182 @@
+#!/usr/bin/perl
+#
+# Use try to connect to a nntp server, and
+# wait for the right output.
+#
+# For use with "mon".
+#
+# Arguments are "-p port -t timeout [-g group] [-f] host [host...]"
+#
+# This monitor connects to the NNTP server(s), checks for a greeting,
+# then performs a "mode reader" and a "group (groupname)", and then disconnects.
+# If the group is not specified by the -g option, then "control" is assumed.
+#
+# if "-f" is supplied, then it is assumed that a feeder is being tested,
+# and the "mode reader" and "group (groupname)" commands are not executed.
+#
+# Adapted from "http.monitor" by
+# Jim Trocki, trockij@transmeta.com
+#
+# http.monitor written by
+#
+# Jon Meek
+# American Cyanamid Company
+# Princeton, NJ
+#
+# $Id: nntp.monitor 1.3 Sat, 30 Jun 2001 14:44:29 -0400 trockij $
+#
+#    Copyright (C) 1998, Jim Trocki
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+use Getopt::Std;
+use English;
+
+getopts ("fg:p:t:d");
+$GROUP = $opt_g || 'control';
+$PORT = $opt_p || 119;
+$TIMEOUT = $opt_t || 30;
+$FEEDER = $opt{"f"};
+$DEBUG = $opt_d || "";
+
+@failures = ();
+
+foreach $host (@ARGV) {
+
+    if (! &nntpGET($host, $PORT)) {
+	push (@failures, $host);
+    }
+}
+
+if (@failures == 0) {
+    exit 0;
+}
+
+print join (" ", sort @failures), "\n";
+
+exit 1;
+
+
+sub nntpGET {
+    use Socket;
+    use Sys::Hostname;
+
+    my($Server, $Port) = @_;
+    my($ServerOK, $TheContent);
+
+    $ServerOK = 0;
+
+    $TheContent = '';
+
+    $Path = '/';
+
+###############################################################
+    eval {
+
+	local $SIG{ALRM} = sub { die "Timeout Alarm" };
+	alarm $TIMEOUT;
+	$result = &OpenSocket($Server, $Port); # Open a connection to the server
+	if ($result == 0) { # Failure to open the socket
+	    print "Unable to open socket\n" if $DEBUG;
+	    return '';
+	}
+
+	#
+	# welcome message
+	#
+	$in = <S>;
+	if ($in !~ /^2\d\d/) {
+	    alarm 0;
+	    print "No welcome message\n" if $DEBUG;
+	    return 0;
+	}
+
+	if (!$FEEDER) {
+	    #
+	    # mode reader, wait for OK response
+	    #
+	    print S "mode reader\r\n";
+
+	    $in = <S>;
+	    if ($in !~ /^2\d\d/) {
+		alarm 0;
+		print "Unable to perform 'mode reader'\n" if $DEBUG;
+		return 0;
+	    }
+
+	    #
+	    # select $GROUP group, wait for OK response
+	    #
+	    print S "group $GROUP\r\n";
+
+	    $in = <S>;
+	    if ($in !~ /^2\d\d/) {
+		alarm 0;
+		print "Unable to select group '$GROUP'\n" if $DEBUG;
+		return 0;
+	    }
+	}
+
+	#
+	# log out
+	#
+	print S "quit\r\n";
+
+	$in = <S>;
+	if ($in !~ /^2\d\d/) {
+	    alarm 0;
+	    print "No response on 'quit' command.\n" if $DEBUG;
+	    return 0;
+	}
+
+	$ServerOK = 1;
+
+	close(S);
+	alarm 0; # Cancel the alarm
+
+    };
+
+    if ($EVAL_ERROR and ($EVAL_ERROR =~ /^Timeout Alarm/)) {
+	print "**** Time Out\n";
+	return 0;
+    }
+    return $ServerOK;
+
+}
+
+sub OpenSocket {
+#
+# Make a Berkeley socket connection between this program and a TCP port
+#  on another (or this) host. Port can be a number or a named service
+#
+    local($OtherHostname, $Port) = @_;
+    local($OurHostname, $sockaddr, $name, $aliases, $proto, $type, $len,
+	  $ThisAddr, $that);
+    $OurHostname = &hostname;
+
+    ($name, $aliases, $proto) = getprotobyname('tcp');
+    ($name, $aliases, $Port) = getservbyname($Port, 'tcp') unless $Port =~ /^\d+$/;
+    ($name, $aliases, $type, $len, $ThisAddr) = gethostbyname($OurHostname);
+    ($name, $aliases, $type, $len, $OtherHostAddr) = gethostbyname($OtherHostname);
+
+    my $that = sockaddr_in ($Port, $OtherHostAddr);
+
+    $result = socket(S, &PF_INET, &SOCK_STREAM, $proto) || return undef;
+
+    $result = connect(S, $that) || return undef;
+
+    select(S); $| = 1; select(STDOUT);      # set S to be un-buffered
+    return 1;                               # success
+}

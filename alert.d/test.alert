@@ -1,0 +1,4 @@
+#!/bin/sh
+#
+# $Id: test.alert 1.1 Sat, 26 Aug 2000 15:22:34 -0400 trockij $
+echo "`date` $*" >> /tmp/test.alert.log

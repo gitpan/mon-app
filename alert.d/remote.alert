@@ -1,0 +1,72 @@
+#!/usr/bin/perl
+#
+# remote.alert - send trap alert to remote mon
+#
+# The first line from STDIN is summary information, adequate to send
+# to a pager or email subject line.
+#
+# Jim Farrell, jwf@paritybit.com
+#
+use Getopt::Std;
+use Text::Wrap;
+use Mon::Client;
+
+getopts ("S:s:g:h:t:l:uH:P:");
+
+$summary=<STDIN>;
+chomp $summary;
+
+$host = $opt_H ? $opt_H : 'localhost';
+$port = $opt_P ? $opt_P : 2583 ;
+
+$summary = $opt_S if (defined $opt_S);
+
+if( $ENV{'MON_TRAP_INTENDED'} ) {
+	$summary = "$ENV{'MON_TRAP_INTENDED'}: $summary";
+}
+
+$mailaddrs = join (',', @ARGV);
+
+$ALERT = $opt_u ? "UPALERT" : "ALERT";
+
+$t = localtime($opt_t);
+($wday,$mon,$day,$tm) = split (/\s+/, $t);
+
+@detail=<STDIN>;
+
+$mon = new Mon::Client(
+                host => $host,
+		port => $port
+        );
+
+$opstatus= $opt_u ? 'ok' : 'fail' ;
+$det = join("",@detail);
+
+$t = SendTrap($mon, $opt_g, $opt_s, 0, $opstatus, $summary, $det);
+
+exit( ! $t );
+
+
+sub SendTrap {
+        my $monobj = shift;
+        my $group = shift;
+        my $service = shift;
+        my $retval = shift;
+        my $status = shift;
+        my $sum = shift;
+        my $dtl = shift;
+
+        my $return;
+
+        # Send the trap
+        $return = $monobj->send_trap(
+                group => $group,
+                service => $service,
+                retval => $retval,
+                opstatus => $status,
+                summary => $sum,
+                detail => $dtl
+        ) || return(0);
+
+        return(1);
+}

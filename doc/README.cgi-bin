@@ -1,0 +1,36 @@
+$Id: README.cgi-bin 1.1 Sat, 26 Aug 2000 15:22:34 -0400 trockij $
+
+mon.cgi
+-------
+    mon.cgi used to be a part of the mon distribution, but it is now
+    maintained by Andrew Ryan <andrewr@nam-shub.com>. The latest
+    release can be found at
+
+    http://www.nam-shub.com/files/
+
+    or
+
+    ftp://ftp.kernel.org/pub/software/admin/mon/contrib/
+
+minotaur
+--------
+    minotaur is maintained by Gilles Lamiral. You may obtain it from
+    here:
+
+    http://www.linux-france.org/prj/minotaure/
+
+
+monshow.cgi
+-----------
+
+    monshow can be found in the client/ directory. Put it into your
+    cgi-bin directory, rename it monshow.cgi, and it should run via your
+    web server's CGI mechanism. Upon startup, this script looks for a
+    configuration file named "/etc/mon/monshowrc", or ".monshowrc" in
+    the working directory. An example monshowrc is in the etc/ direcory.
+    Read the man page for more information.
+
+
+Jim Trocki
+Transmeta Corporation
+trockij@transmeta.com

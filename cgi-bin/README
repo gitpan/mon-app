@@ -1,0 +1,13 @@
+$Id: README 1.1 Sat, 26 Aug 2000 15:22:34 -0400 trockij $
+
+mon.cgi used to be a part of the mon distribution, but it is now
+maintained by Andrew Ryan <andrewr@nam-shub.com>. The latest
+release can be found at
+
+http://www.nam-shub.com/files/
+
+or
+
+ftp://ftp.kernel.org/pub/software/admin/mon/contrib/
+
+

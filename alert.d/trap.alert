@@ -1,0 +1,81 @@
+#!/usr/bin/perl
+#
+# Trap alert, for use with mon-0.38pre* and greater.
+#
+# Specify user and pass via MON_TRAP_USER (-U) and MON_TRAP_PASS (-P)
+#
+# Jim Trocki, trockij@transmeta.com
+#
+# $Id: trap.alert 1.1 Sat, 26 Aug 2000 15:22:34 -0400 trockij $
+#
+#    Copyright (C) 1998, Jim Trocki
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+use Getopt::Std;
+use Socket;
+getopts ("s:g:h:t:l:o:uU:P:");
+
+$TRAP_PRO_VERSION = 0.3807;
+
+$summary=<STDIN>;
+chomp $summary;
+
+$detail = "";
+while (<STDIN>) {
+    $detail .= $_;
+}
+chomp $detail;
+
+$t = time;
+
+$USER = ($ENV{"MON_TRAP_USER"} || $opt_U) || "";
+$PASS = ($ENV{"MON_TRAP_PASS"} || $opt_P) || "";
+$OPST = defined $ENV{"MON_OPSTATUS"} ? $ENV{"MON_OPSTATUS"} : 0;
+
+if ($opt_o) {
+    $OPST = int ($opt_o);
+}
+
+$pkt = "";
+$pkt .= "pro=$TRAP_PRO_VERSION\n";
+$pkt .= "usr=$USER\n" . "pas=$PASS\n" if ($USER ne "");
+$pkt .= "typ=$ENV{MON_ALERTTYPE}\n";
+$pkt .= "seq=0\n";
+$pkt .= "grp=$ENV{MON_GROUP}\n";
+$pkt .= "svc=$ENV{MON_SERVICE}\n";
+$pkt .= "sta=$ENV{MON_RETVAL}\n";
+$pkt .= "spc=$OPST\n";
+$pkt .= "tsp=$t\n";
+$pkt .= "sum=$summary\n";
+$pkt .= "dtl=$detail\n.\n";
+
+$proto = getprotobyname ("udp") || die "could not get proto\n";
+socket (TRAP, AF_INET, SOCK_DGRAM, $proto) ||
+    die "could not create UDP socket: $!\n";
+
+$port = getservbyname ('mon', 'udp') || 2583;
+
+foreach $host (@ARGV) {
+    my $paddr = sockaddr_in ($port, inet_aton ($host));
+    if (!defined (send (TRAP, $pkt, 0, $paddr))) {
+    	print STDERR "could not send trap to $host: $!\n";
+	next;
+    }
+}
+
+close (TRAP);
+
+exit;

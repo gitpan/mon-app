@@ -1,0 +1,468 @@
+#!/usr/bin/perl
+#
+#
+# Parallel query version New Years Eve 2000/2001 Jon Meek
+# The timing in this version is probably not as accurate or precise as http_tp.monitor
+
+=head1 NAME
+
+B<http_tpp.monitor> - Parallel query http server monitor for mon
+
+=head1 DESCRIPTION
+
+Parallel query http server monitor for mon. Logs
+timing and size results, can use a proxy server, and can incorporate a
+"Smart Alarm" function via a user supplied Perl module.
+
+=head1 SYNOPSIS
+
+B<http_tpp.monitor> -l log_file_YYYYMM.log -T alarm_seconds -t timeout_seconds host [host:/path_to_doc ...]
+
+=head1 OPTIONS
+
+=over 5
+
+=item B<-d> Debug/Test
+
+=item B<-r> Follow redirects, can be useful with -d
+
+=item B<-t timeout> (seconds)
+
+=item B<-T alarm_limit> (seconds)
+
+=item B<-l log_file_template> /path/to/logs/internet_web_YYYYMM.log Current year & month are substituted
+for YYYYMM, that is the only possible template at this time.
+
+=item B<-a> list all results if there is a failure, otherwise list only failed tests
+
+=item B<-s> Use "Smart Alarm" module (must be provided by user)
+
+=back
+
+=head1 MON CONFIGURATION EXAMPLE
+
+Note that a proxy will be used to access ot.myweb.com
+
+ hostgroup internet_web www.ama-assn.org
+                        www.gartner.com
+                        test.mysite.com:/~meekj/ca_zip.txt
+                        ot.myweb.com/ca_zip.txt@proxy.mysite.com
+ 
+ watch internet_web
+         service internet_web
+         interval 5m
+         monitor http_tpp.monitor -l /usr/local/mon/logs/internet_web_YYYYMM.log -T 10 -t 15
+         period wd {Sun-Sat}
+             alert mail.alert firewall_admin
+             alertevery 1h summary
+
+  Command line test examples:
+
+  http_tpp.monitor -d www.redhat.com bns.pha.com mytheyw.com/_mem_bin/FormsLogin.asp\?/ nonexist.pha.com www.sun.com/@proxy.labs.theyw.com
+
+  http_tpp.monitor -d www.redhat.com@proxy.labs.theyw.com www.sun.com/@proxy.labs.theyw.com www.yahoo.com/@proxy.labs.theyw.com
+
+=head1 BUGS
+
+On some systems, and/or versions of Perl modules, selecting a proxy
+for any queries will result in the proxy being used for all queries.
+
+The "Smart Alarm" module is not yet documented here.
+
+LWP::Parallel::UserAgent has default values on the number of parallel
+queries that will be made at once. These values cannot be currently
+changed via options.
+
+Because LWP::Parallel::UserAgent does not seem to allow a per request
+setting of the proxy, each proxy, and the no-proxy queries must be
+done separately.
+
+The previous two issues mean that the time to do all of the queries
+could often exceed the timeout setting due to the multiple rounds of
+request batches.
+
+The timing results are not highly accurate due to the
+parallelization. In the future an option to capture and analyze the
+actual packet stream might be added.
+
+=head1 REQUIRED PERL MODULES
+
+ LWP::Parallel::UserAgent
+ HTTP::Request::Common
+ Time::HiRes
+
+=head1 AUTHOR
+
+Jon Meek, meekj@ieee.org
+
+=head1 SEE ALSO
+
+phttp.monitor by Gilles LAMIRAL
+
+=cut
+
+#
+# Jon Meek
+# Lawrenceville, NJ
+# meekj@ieee.org
+#
+# $Id: http_tpp.monitor 1.1 Fri, 27 Jul 2001 11:39:59 -0400 trockij $
+#
+#    Copyright (C) 2001, Jon Meek
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, write to the Free Software
+#    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+#
+
+# Overload LWP::Parallel::UserAgent functions to provide timing and error
+#  returns. Adapted from an example in the LWP::Parallel::UserAgent release.
+#
+# provide subclassed UserAgent to override on_connect, on_failure & on_return methods
+#
+package puaTimer;
+
+use Exporter();
+use LWP::Parallel::UserAgent qw(:CALLBACK);
+use Time::HiRes qw( gettimeofday tv_interval );
+
+# Can't use 'our' until Perl 5.6
+
+#our @ISA = qw(LWP::Parallel::UserAgent Exporter);
+#our @EXPORT = qw(@LWP::Parallel::UserAgent::EXPORT_OK
+#		 %httpTime %httpSize %httpCode %httpMessage);
+
+#our (%T1, %T2); # Hold time data
+
+@ISA = qw(LWP::Parallel::UserAgent Exporter);
+@EXPORT = qw(@LWP::Parallel::UserAgent::EXPORT_OK
+		 %httpTime %httpSize %httpCode %httpMessage);
+
+my (%T1, %T2); # Hold time data
+
+# redefine methods: on_connect gets called whenever we're about to
+# make a a connection
+sub on_connect {
+  my ($self, $request, $response, $entry) = @_;
+  $T1{$request->url} = [gettimeofday]; # Save connect time
+}
+
+# on_failure gets called whenever a connection fails right away
+# (either we timed out, or failed to connect to this address before,
+# or it's a duplicate). Please note that non-connection based
+# errors, for example requests for non-existant pages, will NOT call
+# on_failure since the response from the server will be a well
+# formed HTTP response!
+sub on_failure {
+  my ($self, $request, $response, $entry) = @_;
+  $T2{$request->url} = [gettimeofday];
+  $httpCode{$request->url} = $response->code;
+  $httpMessage{$request->url} = $response->message;
+  $httpTime{$request->url} = -1 * tv_interval($T1{$request->url}, $T2{$request->url});;
+}
+
+# on_return gets called whenever a connection (or its callback)
+# returns EOF (or any other terminating status code available for
+# callback functions). Please note that on_return gets called for
+# any successfully terminated HTTP connection! This does not imply
+# that the response sent from the server is a success!
+sub on_return {
+  my ($self, $request, $response, $entry) = @_;
+  $T2{$request->url} = [gettimeofday];
+  $httpTime{$request->url} = tv_interval($T1{$request->url}, $T2{$request->url});
+  $httpCode{$request->url} = $response->code;
+  $httpSize{$request->url} = length($response->content);
+  return;
+}
+
+#
+### Main program #################
+#
+package main;
+
+use Getopt::Std;
+use English;
+use Time::HiRes qw( gettimeofday tv_interval );
+use HTTP::Request::Common;
+
+
+#puaTimer->import qw(%httpTime %httpSize %httpCode %httpMessage); # Requires Perl 5.6
+
+$RCSid = q{$Id: http_tpp.monitor 1.1 Fri, 27 Jul 2001 11:39:59 -0400 trockij $};
+$RCSver = q{$Revision: 1.1 $};
+
+puaTimer->import();
+
+getopts ("dras:t:T:l:");
+
+if ($opt_s) { # Use Smart Alarm module
+  use lib "/usr/local/mon/mon.d"; # Use ENV variable or option later
+#  use lib "/n/na1/uhome/meekj/lab/mon"; # Use ENV variable or option later
+  eval "use httpSmartAlarm";
+  do {
+    warn "Couldn't load httpSmartAlarm: $@";
+    undef $opt_s;
+  } unless ($@ eq '');
+  httpSmartAlarm->import();
+}
+
+$TIMEOUT = $opt_t || 30; # Default timeout in seconds
+
+if ($opt_r) {
+  $FollowRedirect = 1;
+} else {
+  $FollowRedirect = 0;
+}
+
+@Failures = ();
+
+$TimeOfDay = time;
+print "TimeOfDay: $TimeOfDay\n" if $opt_d;
+
+foreach $host_path (@ARGV) { # Build host and path lists
+
+  print "ARG: $host_path\n" if $opt_d;
+
+  undef $proxy_server;
+  if ($host_path =~ /@/) {
+    ($host_path, $proxy_server) = split(/@/, $host_path, 2);
+  }
+
+  $host = '';
+  $path = '';
+  ($host, $path) = split(/\//, $host_path, 2);
+
+  if (defined $proxy_server) {
+    $ProxyServer = $proxy_server;
+  } else {
+    $ProxyServer = 'noproxy';
+  }
+
+  $url = "http://$host/$path"; # Build and save URL for test request
+  push (@{ $ReqsByProxy{$ProxyServer} }, $url);
+
+}
+
+if ($opt_d) {
+  print "\nRequest List:\n";
+  for $proxy (keys %ReqsByProxy) {
+    print " Proxy: $proxy\n";
+    for $i (0 .. $#{ $ReqsByProxy{$proxy} } ) {
+      print "  $i  -  $ReqsByProxy{$proxy}[$i]\n";
+    }
+  }
+}
+
+# Limited testing with packet capture shows that there could be about
+# an extra 150ms on the first measurement
+
+# Do a dummy httpGET to initialize the code, if we don't do this there
+# will be 250 ms extra added to the first time. This dummy call
+# still does not completely clear this problem, there may still be an
+# extra 10ms on the first test.
+
+#$host = '';
+#$path = '';
+#$proxy = '';
+#($OK, $ByteCount, $GetTime) = &httpGET($host, $path, $proxy);
+
+my $pua = puaTimer->new();
+
+$TestElapsedT1 = [gettimeofday] if $opt_d;
+
+#
+# Do checks grouped by proxy, LWP::Parallel::UserAgent does not provide per-request proxies
+#
+for $proxy (keys %ReqsByProxy) {
+  print "\nDoing requests for $proxy\n" if $opt_d;
+#  $pua = puaTimer->new();
+  $pua->initialize;
+  $pua->agent('mon-http_tpp/' . $RCSver);
+  $pua->in_order  (1);		# handle requests in order of registration
+  $pua->duplicates(0);		# ignore duplicates
+  $pua->timeout   ($TIMEOUT); 	# in seconds
+  $pua->redirect($FollowRedirect); # follow redirects?
+
+  if ($proxy ne 'noproxy') {
+    $pua->proxy('http', "http://$proxy"); # Set proxy if needed
+  } else {
+#    $pua->proxy('', '');
+    $pua->proxy(undef);
+  }
+
+#  $req = HTTP::Request->new(GET => ''); # Dummy request to initialize code, does not work
+#  print "Registering '".$req->url."'\n" if $opt_d;
+#  if ( $res = $pua->register ($req) ) {
+#    print STDERR $res->error_as_HTML;
+##    print STDERR $res->error_as_string;
+#  }
+  #
+  # Check each http target
+  #
+  for ($i = 0; $i <= $#{ $ReqsByProxy{$proxy} }; $i++) {
+    #
+    # Register the request
+    #
+    $url = $ReqsByProxy{$proxy}[$i];
+    $req = HTTP::Request->new(GET => "$url");
+    print "Registering '".$req->url."'\n" if $opt_d;
+    if ( $res = $pua->register ($req) ) {
+      #  if ( my $res = $pua->register ($req. proxy => $Proxy) ) { # Would like this to work
+      print STDERR $res->error_as_HTML;
+    }
+    print "\n$host - $path - $proxy\n" if ($opt_d);
+  }
+  $entries = $pua->wait($TIMEOUT);	# Submit requests and wait for returns
+
+  $TotalResponseTime = 0;
+  foreach  $k (keys %httpTime) {
+    
+    $k =~ /^http:\/\/(.*?)\/(.*)/;
+    $host = $1;
+    $path = $2;
+    $key = "$k\@$proxy";
+
+    if (length($path) < 1) {	# Set the path for logging purposes
+      $path = '/';		# we don't want an empty, space separated, field
+    }
+    
+    $httpTime2 = $puaTimer::httpTime{$k};
+    $ThisTestFailed = 0;        # Assume success
+    if ($puaTimer::httpTime{$k} < 0) {	# Indicates failure or timeout
+      push (@Failures, $host);
+      $ThisTestFailed = 1;
+    }
+#print "******** $ThisTestFailed ********** $puaTimer::httpCode{$k} \n";
+    if (($ThisTestFailed == 0) && ($puaTimer::httpCode{$k} ne '200')) { # HTTP/1.1 200 OK
+
+#print "******** ThisTestFailed for $host ********** $puaTimer::httpCode{$k} \n";
+      push (@Failures, $host);
+      $httpTime2 = -1;
+      $ThisTestFailed = 1;
+    }
+
+    # Check time limit for alarm, if there was no other failure
+    if (($ThisTestFailed == 0) && ($opt_T)) {
+      if ($puaTimer::httpTime{$k} > $opt_T) {
+	push (@Failures, $host);
+	$httpTime2 = -1;
+	$ThisTestFailed = 1;
+      }
+    }
+    $TotalResponseTime += abs($httpTime{$k});
+
+    $LogString{$key} = sprintf "%d %s %s %s %d %0.3f",
+    $TimeOfDay, $proxy, $host, $path, $puaTimer::httpSize{$k}, $httpTime2;
+
+    chomp($puaTimer::httpMessage{$k});
+    $DetailString{$key} = sprintf "%d %s %s %s %d %d %0.3f %s",
+    $TimeOfDay, $proxy, $host, $path,
+    $puaTimer::httpCode{$k}, $puaTimer::httpSize{$k},
+    $httpTime2, $puaTimer::httpMessage{$k};
+
+    $FailureString{$key} = $DetailString{$key} if $ThisTestFailed;
+    
+    if ($opt_d) {
+      print  "logstring for $key $LogString{$key}\n";
+      printf "key: %-25s  %8.3f %9d %5d %s\n\n",
+      $key, $httpTime2, $puaTimer::httpSize{$k},
+      $puaTimer::httpCode{$k}, $puaTimer::httpMessage{$k};
+    }
+
+  }
+  undef %puaTimer::httpTime; # Delete results for current proxy setting
+  undef %puaTimer::httpSize;
+  undef %puaTimer::httpCode;
+  undef %puaTimer::httpMessage;
+}
+
+#
+# Show elapsed time and what will be in the log file
+#
+if ($opt_d) {
+  $TestElapsedT2 = [gettimeofday];
+  $TestElapsedTime = tv_interval($TestElapsedT1, $TestElapsedT2);
+  printf "TotalResponseTime: %0.3f   Elapsed Clock Time: %0.3f\n",
+  $TotalResponseTime, $TestElapsedTime;
+
+  print "\nLog File Records:\n";
+  foreach $host (sort keys %LogString) {
+    print  "$LogString{$host}\n";
+  }
+
+  print "\nDetails:\n";
+  foreach $host (sort keys %DetailString) {
+    print  "$DetailString{$host}\n";
+  }
+}
+
+#
+# Write results to logfile, if -l
+#
+if ($opt_l) {
+
+  $LogFile = $opt_l;
+  ($sec, $min, $hour, $mday, $Month, $Year, $wday, $yday, $isdst) =
+    localtime($TimeOfDay);
+  $Month++; $Year += 1900;
+  $YYYYMM = sprintf('%04d%02d', $Year, $Month);
+  $LogFile =~ s/YYYYMM/$YYYYMM/; # Fill in current year and month
+
+  open(LOG, ">>$LogFile") || warn "$0 Can't open logfile: $LogFile\n";
+
+  foreach $host (sort keys %LogString) {
+    print LOG "$LogString{$host}\n";
+  }
+  
+  close LOG;
+}
+
+if ($opt_s) { # Smart alarm enabled
+
+  ($result, @Failures) = &CheckAlarm($opt_s, %DetailString);
+  print "*** CheckAlarm: $result\n" if $opt_d;
+  @SortedFailures = sort @Failures;
+
+} else {
+
+  foreach $host (@Failures) { # Remove duplicate hostnames,
+    $UniqueHosts{$host}++;    # we might check multiple services on a single machine
+  }
+  @SortedFailures = sort keys %UniqueHosts; # Sort to help mon in summary mode
+
+}
+
+if (@Failures == 0) {      # No failures, exit with status 0
+  exit 0;
+}
+
+print "@SortedFailures\n"; # There were failures, list them
+
+if ($opt_a) {                            # Show all results in details
+  foreach $k (sort keys %DetailString) { # Then provide details
+    $s = $DetailString{$k};
+    $s =~ s/^\d+//; # Remove time for compactness (but we may want to use it in the future)
+    print "$s\n";
+    print "FAIL: $s\n" if $opt_d;    
+  }
+} else { # Show only failures in summary
+  foreach $k (sort keys %FailureString) { # Then provide details
+    $s = $FailureString{$k};
+    $s =~ s/^\d+//; # Remove time for compactness
+    print "$s\n";
+    print "FAIL: $s\n" if $opt_d;    
+  }
+}
+
+exit 1; # Indicate failure to mon
+

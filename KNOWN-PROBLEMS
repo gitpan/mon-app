@@ -1,0 +1,25 @@
+#
+# $Id: KNOWN-PROBLEMS 1.4 Sat, 08 Sep 2001 10:07:44 -0400 trockij $
+# Release $Name: mon-0-38-19pre1 $
+#
+
+KNOWN PROBLEMS in 0.99.2
+--------------------------
+
+clients/skymon has not yet been updated to work with the new Mon::Client
+API.
+
+monerrfile is not documented in mon.8
+
+the 'all' directive for auth.cf is not specifically enumerated in
+mon.8
+
+monerrfile doesn't work unless the server is in daemon mode, which
+should be made clearer.
+
+monerrfile is buffered, which is a PITA if you're trying to debug
+something and there's a 5 minute lag between the time stderr/out is
+written and the time you see it in your file, depending on how long it
+takes the buffer to fill. I experiemented a little with select() and $|
+to try and get this unbuffered, but wasn't able to make it work.
+
